@@ -112,17 +112,14 @@ class N3DSCaptureCard:
     def vend_out(self, b_request: int, w_value: int, w_length: int) -> Union[array, int]:
         """Write vendor request to control endpoint.  Returns bytes transferred (<0 = libusb error)
         """
-        try:
-            return self.device.ctrl_transfer(
-                bmRequestType=usb.util.CTRL_TYPE_VENDOR | usb.util.ENDPOINT_OUT,
-                bRequest=b_request,
-                wValue=w_value,
-                wIndex=0,
-                data_or_wLength=w_length,
-                timeout=CONTROL_TIMEOUT
-            )
-        except AttributeError:
-            return -1
+        return self.device.ctrl_transfer(
+            bmRequestType=usb.util.CTRL_TYPE_VENDOR | usb.util.ENDPOINT_OUT,
+            bRequest=b_request,
+            wValue=w_value,
+            wIndex=0,
+            data_or_wLength=w_length,
+            timeout=CONTROL_TIMEOUT
+        )
 
 
     def bulk_in(self, length: int) -> array:
@@ -193,6 +190,8 @@ class N3DSCaptureCard:
         except usb.core.USBTimeoutError as usb_err:
             logging.exception(usb_err)
             return (CaptureResult.SKIP, [])
+        except AttributeError:
+            return (CaptureResult.ERROR, [])
 
         if result < 0:
             return (CaptureResult.ERROR, [])
@@ -210,15 +209,16 @@ class N3DSCaptureCard:
         return (CaptureResult.OK, transferred)
 
 
-    def get_version(self) -> array:
+    def get_version(self) -> int:
         """5 = first public release. 6 = 3D capture support (beta)
         """
         version = array('i', [0])
         self.read_config(N3DSCFG_BITSTREAM_VER, version, 1)
+
         return version[0]
 
 
-    def on_close(self):
+    def on_close(self) -> None:
         """Dispose resources and destroy window
         """
         self.dispose_resources()
@@ -228,8 +228,10 @@ class N3DSCaptureCard:
     def process_audio(self, frame_data: np.ndarray[np.uint8]) -> None:
         """Extract audio data and process as needed
         """
-        audio_data = np.trim_zeros(frame_data[IMAGE_SIZE:].view(np.uint16))
-        pygame.mixer.Sound(buffer=audio_data.tobytes()).play()
+        audio_sample = np.trim_zeros(frame_data[IMAGE_SIZE:].view(np.uint16))
+        if len(audio_sample) > 0:
+            sound = pygame.mixer.Sound(buffer=audio_sample.tobytes())
+            sound.play()
 
 
     def rotate_and_crop_frame(
@@ -281,7 +283,7 @@ class N3DSCaptureCard:
             pass
 
 
-    def capture_and_show_frames(self):
+    def capture_and_show_frames(self) -> None:
         """Capture and show the frames in a loop
         """
         self.start_time = time.time()
