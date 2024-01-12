@@ -3,7 +3,6 @@ contourpy==1.2.0
 cycler==0.12.1
 fonttools==4.47.0
 kiwisolver==1.4.5
-numpy==1.26.3
 packaging==23.2
 pillow==10.2.0
 PyAudio==0.2.14

@@ -3,17 +3,16 @@
 """
 import asyncio
 import logging
-from threading import Thread
 import time
 from array import array
 from enum import Enum
-from typing import Tuple, Union
+from threading import Thread
+from typing import Union
 
 import tkinter as tk
 import pyaudio
 import usb.core
 import usb.util
-import numpy as np
 from PIL import Image, ImageTk
 
 
@@ -99,10 +98,10 @@ class N3DSCaptureAudio:
         )
 
 
-    def process_audio(self, audio_sample: np.ndarray[np.uint8]) -> None:
+    def _process_audio(self, audio_sample: array) -> None:
         """Extract audio data and process as needed
         """
-        self.stream.write(audio_sample.view(np.uint16).tobytes())
+        self.stream.write(audio_sample.tobytes())
 
 
     async def async_worker(self) -> None:
@@ -113,14 +112,14 @@ class N3DSCaptureAudio:
                 sample = await self.audio_samples_queue.get()
                 if sample is None:
                     break
-                self.process_audio(sample)
+                self._process_audio(sample)
             except asyncio.QueueEmpty:
                 pass
             except N3DSCaptureException as e:
                 logging.error(e)
 
 
-    def push_sample(self, audio_sample: np.ndarray[np.uint8]) -> None:
+    def push_sample(self, audio_sample: array) -> None:
         """Push sample
         """
         asyncio.run_coroutine_threadsafe(
@@ -193,7 +192,7 @@ class N3DSCaptureCard:
         )
         self.lower_display.create_image(0, 0, anchor='nw', image=transparent_image)
 
-        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
+        self.root.protocol('WM_DELETE_WINDOW', self._on_close)
         self.frames_per_second = tk.StringVar()
         self.root.title(TITLE.format(fps=0.0))
         self.last_fps_update_time = time.time()
@@ -207,7 +206,7 @@ class N3DSCaptureCard:
         self.seed = array('B')
 
 
-    def vend_out(
+    def _vend_out(
         self, b_request: int, w_value: int, data_or_w_length: Union[int, array]
     ) -> Union[array, int]:
         """Write vendor request to control endpoint.
@@ -223,7 +222,7 @@ class N3DSCaptureCard:
         )
 
 
-    def bulk_in(self, size_or_buffer: Union[int, array]) -> array:
+    def _bulk_in(self, size_or_buffer: Union[int, array]) -> array:
         """Read from bulk endpoint. Returns libusb error code
         """
         return self.device.read(
@@ -255,7 +254,7 @@ class N3DSCaptureCard:
 
         usb.util.claim_interface(self.device, self.interface)
 
-        self.vend_out(CMDOUT_CAPTURE_START, 0, 0)
+        self._vend_out(CMDOUT_CAPTURE_START, 0, 0)
         time.sleep(0.5)
 
         return True
@@ -274,11 +273,18 @@ class N3DSCaptureCard:
         self.n3ds_audio.close()
 
 
-    def grab_frame(self) -> CaptureResult:
+    def _on_close(self) -> None:
+        """Dispose resources and destroy window
+        """
+        self.dispose_resources()
+        self.root.destroy()
+
+
+    def _grab_frame(self) -> CaptureResult:
         """Gets 240x720 RGB24 (rotated) frame.
         """
         try:
-            result = self.vend_out(CMDOUT_CAPTURE_START, 0, self.seed)
+            result = self._vend_out(CMDOUT_CAPTURE_START, 0, self.seed)
         except usb.core.USBTimeoutError as usb_err:
             logging.exception(usb_err)
             return CaptureResult.SKIP
@@ -289,7 +295,7 @@ class N3DSCaptureCard:
             return CaptureResult.ERROR
 
         try:
-            self.bulk_in(self.transferred)
+            self._bulk_in(self.transferred)
         except usb.core.USBTimeoutError as usb_err:
             logging.exception(usb_err)
             return CaptureResult.SKIP
@@ -297,52 +303,29 @@ class N3DSCaptureCard:
         return CaptureResult.OK
 
 
-    def on_close(self) -> None:
-        """Dispose resources and destroy window
-        """
-        self.dispose_resources()
-        self.root.destroy()
-
-
-    def rotate_and_crop_frame(
-        self, rgb_array: np.ndarray[np.uint8]
-    ) -> Tuple[ImageTk.PhotoImage, ImageTk.PhotoImage]:
-        """Rotate the image 90 degrees to the left and
-        split the image into upper and lower display
-        """
-        frame_image = Image.fromarray(rgb_array, 'RGB').rotate(90, expand=True)
-
-        # Convert PIL Images to PhotoImages
-        upper_image = ImageTk.PhotoImage(
-            frame_image.crop((0, 0, N3DS_DISPLAY1_WIDTH, FRAME_WIDTH)))
-        lower_image = ImageTk.PhotoImage(
-            frame_image.crop((N3DS_DISPLAY1_WIDTH, 0, FRAME_HEIGHT, FRAME_WIDTH)))
-
-        return upper_image, lower_image
-
-
-    def show_frame(self, rgb_array: np.ndarray[np.uint8]) -> None:
+    def _show_frame(self, rgb_array: array) -> None:
         """Show the image from the frame buffer
         """
-        # Extract RGB image data
-        rgb_array = rgb_array.reshape((FRAME_HEIGHT, FRAME_WIDTH, 3))
-
         try:
-            # Check if the Tkinter window still exists
-            upper_image, lower_image = self.rotate_and_crop_frame(rgb_array)
+            frame_image = ImageTk.PhotoImage(Image.frombuffer(
+                'RGB',
+                (FRAME_WIDTH, FRAME_HEIGHT),
+                rgb_array,
+                'raw', 'RGB', 0, 1 # decoder params
+            ).rotate(90, expand=True))
 
-            # Update labels with the new images
-            self.upper_display.create_image(0, 0, anchor='nw', image=upper_image)
-            self.lower_display.create_image(0, 0, anchor='nw', image=lower_image)
+            # Update cavas with the new images
+            self.upper_display.create_image(0, 0, anchor='nw', image=frame_image)
+            self.lower_display.create_image(N3DS_DISPLAY2_WIDTH, 0, anchor='ne', image=frame_image)
 
-            # Update the Tkinter window
-            self.root.update()
+            # Update the Tkinter
+            self.upper_display.update()
         except tk.TclError:
             pass
 
 
-    def calculate_fps(self) -> None:
-        """Calculate FPS
+    def _calculate_fps(self) -> None:
+        """Calculate Frames per Second
         """
         try:
             # Update frames per second in the window title
@@ -351,41 +334,52 @@ class N3DSCaptureCard:
             if current_time - self.last_fps_update_time >= 2.0:
                 elapsed_time = current_time - self.start_time
                 fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
-                self.frames_per_second.set(TITLE.format(fps=fps))
-                logging.debug(TITLE.format(fps=fps))
+                title = TITLE.format(fps=fps)
+                self.frames_per_second.set(title)
+                logging.debug(title)
                 self.root.title(self.frames_per_second.get())
                 self.last_fps_update_time = current_time
         except tk.TclError:
             pass
 
 
-    def capture_and_show_frames(self) -> None:
-        """Capture and show the frames in a loop
+    def _capture_and_show_frames(self) -> None:
+        """Capture and show the frames using root.after
+        """
+        frame_result = self._grab_frame()
+
+        if frame_result == CaptureResult.OK:
+            frame_buf = self.transferred
+            self.n3ds_audio.push_sample(frame_buf[IMAGE_SIZE:])
+            self._show_frame(frame_buf[:IMAGE_SIZE])
+            self._calculate_fps()
+            self.frame_count += 1
+        elif frame_result == CaptureResult.ERROR:
+            self.dispose_resources()
+        elif frame_result == CaptureResult.SKIP:
+            pass
+
+        # Schedule the function to run again inmediatly
+        self.root.after('idle', self._capture_and_show_frames)
+
+
+    def process_frames(self) -> None:
+        """Capture and show the frames using root.after
         """
         self.start_time = time.time()
 
         self.n3ds_audio.start()
-        try:
-            while True:
-                frame_result = self.grab_frame()
 
-                if frame_result == CaptureResult.OK:
-                    frame_buf = np.array(self.transferred, dtype=np.uint8)
-                    self.n3ds_audio.push_sample(frame_buf[IMAGE_SIZE:])
-                    self.show_frame(frame_buf[:IMAGE_SIZE])
-                    self.calculate_fps()
-                    self.frame_count += 1
-                elif frame_result == CaptureResult.ERROR:
-                    self.dispose_resources()
-                    break
-                elif frame_result == CaptureResult.SKIP:
-                    pass
+        try:
+            # Start the first call of capture and show
+            self._capture_and_show_frames()
+            # Start the Tkinter main loop
+            self.root.mainloop()
         except N3DSCaptureException as e:
             logging.exception(e)
             self.dispose_resources()
         finally:
             self.n3ds_audio.push_sample(None)
-            self.root.mainloop()  # Start the Tkinter main loop
             self.n3ds_audio.join()
 
 
@@ -393,6 +387,6 @@ if __name__ == '__main__':
     capture_card = N3DSCaptureCard()
     if capture_card.device_init():
         try:
-            capture_card.capture_and_show_frames()
+            capture_card.process_frames()
         finally:
             capture_card.dispose_resources()
