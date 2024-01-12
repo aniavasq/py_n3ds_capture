@@ -107,7 +107,7 @@ class N3DSCaptureCard:
         self.start_time = 0
         self.frame_count = 0
 
-        self.n3ds_audio = N3DSCaptureAudio()
+        self.n3ds_capture_audio = N3DSCaptureAudio()
 
         pygame.init()
         self.display = pygame.display.set_mode(
@@ -180,7 +180,7 @@ class N3DSCaptureCard:
             usb.util.dispose_resources(self.device)
             self.device = None
 
-        self.n3ds_audio.close()
+        self.n3ds_capture_audio.close()
 
 
     def _grab_frame(self) -> CaptureResult:
@@ -206,14 +206,18 @@ class N3DSCaptureCard:
         return CaptureResult.OK
 
 
-    def _show_frame(self, rgb_array: array) -> None:
-        """Show the image from the frame buffer
+    def _show_frame(self, rgb_buf: array) -> None:
+        """Show the image from the RGB buffer
         """
-        frame_surface = pygame.image.frombuffer(rgb_array, (FRAME_WIDTH, FRAME_HEIGHT), 'RGB')
-        frame_surface = pygame.transform.rotate(frame_surface, 90)
-        self.display.blit(frame_surface, (0, 0))
+        frame_surface =  pygame.transform.rotate(pygame.image.frombuffer(
+            rgb_buf, (FRAME_WIDTH, FRAME_HEIGHT), 'RGB'), 90)
+
+        display1_area = (0, 0, N3DS_DISPLAY1_WIDTH, N3DS_DISPLAY_HEIGHT)
+        self.display.blit(frame_surface, (0, 0), display1_area)
+
         display2_area = (N3DS_DISPLAY1_WIDTH, 0, N3DS_DISPLAY2_WIDTH, N3DS_DISPLAY_HEIGHT)
         self.display.blit(frame_surface, (DISPLAY2_X, N3DS_DISPLAY_HEIGHT), display2_area)
+
         pygame.display.flip()
 
 
@@ -225,9 +229,11 @@ class N3DSCaptureCard:
         if current_time - self.last_fps_update_time >= 2.0:
             elapsed_time = current_time - self.start_time
             fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
+
             title = TITLE.format(fps=fps)
             logging.debug(title)
             pygame.display.set_caption(title)
+
             self.last_fps_update_time = current_time
 
 
@@ -238,8 +244,12 @@ class N3DSCaptureCard:
 
         if frame_result == CaptureResult.OK:
             frame_buf = self.transferred
-            self.n3ds_audio.push_sample(frame_buf[IMAGE_SIZE:FRAME_SIZE])
+
+            # Audio capture
+            self.n3ds_capture_audio.push_sample(frame_buf[IMAGE_SIZE:FRAME_SIZE])
+            # Image capture
             self._show_frame(frame_buf[:IMAGE_SIZE])
+
             self._calculate_fps()
             self.frame_count += 1
         elif frame_result == CaptureResult.ERROR:
