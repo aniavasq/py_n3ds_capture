@@ -6,8 +6,8 @@ kiwisolver==1.4.5
 numpy==1.26.3
 packaging==23.2
 pillow==10.2.0
+PyAudio==0.2.14
 pycparser==2.21
-pygame==2.5.2
 pyparsing==3.1.1
 python-dateutil==2.8.2
 pyusb==1.2.1
