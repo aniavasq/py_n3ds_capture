@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """N3DS video capture module
 """
-import asyncio
 import logging
 import time
 from array import array
 from enum import Enum
-from threading import Thread
 from typing import Union
 
 import tkinter as tk
-import pyaudio
+import pygame
 import usb.core
 import usb.util
 from PIL import Image, ImageTk
@@ -26,14 +24,14 @@ EP2_IN = 2 | usb.util.ENDPOINT_IN
 
 CMDOUT_CAPTURE_START = 0x40
 
-SAMPLE_SIZE_8 = 2192
+AUDIO_SAMPLE_SIZE = 2188
 AUDIO_SAMPLE_RATE = 32728 # Hz
 AUDIO_CHANNELS = 2
 
 FRAME_WIDTH = 240
 FRAME_HEIGHT = 720
 IMAGE_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 3 # Assuming RGB24 format
-FRAME_SIZE = IMAGE_SIZE + SAMPLE_SIZE_8
+FRAME_SIZE = IMAGE_SIZE + AUDIO_SAMPLE_SIZE
 
 N3DS_DISPLAY1_WIDTH = 400
 N3DS_DISPLAY2_WIDTH = 320
@@ -70,77 +68,27 @@ class N3DSCaptureAudio:
     """
 
     def __init__(self) -> None:
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.audio_thread = Thread(
-            target=self.loop.run_until_complete,
-            args=(self.async_worker(),)
+        pygame.mixer.init(
+            frequency=AUDIO_SAMPLE_RATE,
+            channels=AUDIO_CHANNELS,
+            buffer=256
         )
-        self.audio_samples_queue = asyncio.Queue()
-
-        self.p = pyaudio.PyAudio()
-        self.channels = min(
-            AUDIO_CHANNELS,
-            self.p.get_default_output_device_info()['maxOutputChannels'])
-        self.sample_rate = AUDIO_SAMPLE_RATE
-        if self.channels < AUDIO_CHANNELS:
-            self.sample_rate = AUDIO_SAMPLE_RATE * 2
-        self.stream = self.p.open(
-            format=pyaudio.paInt16,
-            channels=self.channels,
-            rate=self.sample_rate,
-            output=True,
-        )
-
-
-    def _process_audio(self, audio_sample: array) -> None:
-        """Extract audio data and process as needed
-        """
-        self.stream.write(audio_sample.tobytes())
-
-
-    async def async_worker(self) -> None:
-        """Async audio worker
-        """
-        while True:
-            try:
-                sample = await self.audio_samples_queue.get()
-                if sample is None:
-                    break
-                self._process_audio(sample)
-            except asyncio.QueueEmpty:
-                pass
-            except N3DSCaptureException as e:
-                logging.error(e)
+        self.channel = pygame.mixer.Channel(0)
+        self.channel.set_volume(0.5)
 
 
     def push_sample(self, audio_sample: array) -> None:
         """Push sample
         """
-        asyncio.run_coroutine_threadsafe(
-            self.audio_samples_queue.put(audio_sample),
-            self.loop
+        self.channel.queue(
+            pygame.mixer.Sound(buffer=audio_sample)
         )
-
-
-    def start(self) -> None:
-        """Start thread
-        """
-        self.audio_thread.start()
-
-
-    def join(self) -> None:
-        """Join thread
-        """
-        self.audio_thread.join()
 
 
     def close(self) -> None:
         """Close PyAudio stream
         """
-        self.stream.stop_stream()
-        self.stream.close()
-        self.p.terminate()
+        self.channel.stop()
 
 
 
@@ -345,7 +293,7 @@ class N3DSCaptureCard:
 
         if frame_result == CaptureResult.OK:
             frame_buf = self.transferred
-            self.n3ds_audio.push_sample(frame_buf[IMAGE_SIZE:])
+            self.n3ds_audio.push_sample(frame_buf[IMAGE_SIZE:FRAME_SIZE])
             self._show_frame(frame_buf[:IMAGE_SIZE])
             self._calculate_fps()
             self.frame_count += 1
@@ -363,8 +311,6 @@ class N3DSCaptureCard:
         """
         self.start_time = time.time()
 
-        self.n3ds_audio.start()
-
         try:
             # Start the first call of capture and show
             self._capture_and_show_frames()
@@ -373,9 +319,6 @@ class N3DSCaptureCard:
         except N3DSCaptureException as e:
             logging.exception(e)
             self.dispose_resources()
-        finally:
-            self.n3ds_audio.push_sample(None)
-            self.n3ds_audio.join()
 
 
 if __name__ == '__main__':
