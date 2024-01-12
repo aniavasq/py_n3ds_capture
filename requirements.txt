@@ -1,4 +1,2 @@
-pillow==10.2.0
-PyAudio==0.2.14
+pygame==2.5.2
 pyusb==1.2.1
-tk==0.1.0

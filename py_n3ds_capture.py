@@ -7,11 +7,9 @@ from array import array
 from enum import Enum
 from typing import Union
 
-import tkinter as tk
 import pygame
 import usb.core
 import usb.util
-from PIL import Image, ImageTk
 
 
 VID_3DS = 0x16D0
@@ -24,7 +22,7 @@ EP2_IN = 2 | usb.util.ENDPOINT_IN
 
 CMDOUT_CAPTURE_START = 0x40
 
-AUDIO_SAMPLE_SIZE = 2188
+AUDIO_SAMPLE_SIZE = 2188 # bytes
 AUDIO_SAMPLE_RATE = 32728 # Hz
 AUDIO_CHANNELS = 2
 
@@ -36,7 +34,7 @@ FRAME_SIZE = IMAGE_SIZE + AUDIO_SAMPLE_SIZE
 N3DS_DISPLAY1_WIDTH = 400
 N3DS_DISPLAY2_WIDTH = 320
 N3DS_DISPLAY_HEIGHT = FRAME_WIDTH
-TRANSPARENT_RGBA = (0, 0, 0, 0)
+DISPLAY2_X = (N3DS_DISPLAY1_WIDTH - N3DS_DISPLAY2_WIDTH) // 2
 
 TITLE = 'py N3DS Capture ({fps:.2f} FPS)'
 
@@ -100,53 +98,22 @@ class N3DSCaptureCard:
         self.device: usb.core.Device
         self.interface: usb.core.Interface
 
-        self.root = tk.Tk()
-        self.root.configure(background='black')
+        transfer_size = (FRAME_SIZE + 0x1ff) & ~0x1ff
+        self.transferred = array('B', '\x00'.encode('utf-8') * transfer_size)
+        self.seed = array('B')
 
-        self.upper_display = tk.Canvas(
-            self.root,
-            width=N3DS_DISPLAY1_WIDTH,
-            height=N3DS_DISPLAY_HEIGHT,
-            bd=0,
-            highlightthickness=0
-        )
-        self.upper_display.pack(side=tk.TOP)
-        transparent_image = ImageTk.PhotoImage(
-            Image.new(
-                mode='RGBA',
-                size=(N3DS_DISPLAY1_WIDTH, N3DS_DISPLAY_HEIGHT),
-                color=TRANSPARENT_RGBA)
-        )
-        self.upper_display.create_image(0, 0, anchor='nw', image=transparent_image)
-
-        self.lower_display = tk.Canvas(
-            self.root,
-            width=N3DS_DISPLAY2_WIDTH,
-            height=N3DS_DISPLAY_HEIGHT,
-            bd=0,
-            highlightthickness=0
-        )
-        self.lower_display.pack(side=tk.BOTTOM)
-        transparent_image = ImageTk.PhotoImage(
-            Image.new(
-                mode='RGBA',
-                size=(N3DS_DISPLAY2_WIDTH, N3DS_DISPLAY_HEIGHT),
-                color=TRANSPARENT_RGBA)
-        )
-        self.lower_display.create_image(0, 0, anchor='nw', image=transparent_image)
-
-        self.root.protocol('WM_DELETE_WINDOW', self._on_close)
-        self.frames_per_second = tk.StringVar()
-        self.root.title(TITLE.format(fps=0.0))
+        self.clock = pygame.time.Clock()
         self.last_fps_update_time = time.time()
         self.start_time = 0
         self.frame_count = 0
 
         self.n3ds_audio = N3DSCaptureAudio()
 
-        transfer_size = (FRAME_SIZE + 0x1ff) & ~0x1ff
-        self.transferred = array('B', '\x00'.encode('utf-8') * transfer_size)
-        self.seed = array('B')
+        pygame.init()
+        self.display = pygame.display.set_mode(
+            (N3DS_DISPLAY1_WIDTH, N3DS_DISPLAY_HEIGHT * 2))
+        title = TITLE.format(fps=0.0)
+        pygame.display.set_caption(title)
 
 
     def _vend_out(
@@ -216,13 +183,6 @@ class N3DSCaptureCard:
         self.n3ds_audio.close()
 
 
-    def _on_close(self) -> None:
-        """Dispose resources and destroy window
-        """
-        self.dispose_resources()
-        self.root.destroy()
-
-
     def _grab_frame(self) -> CaptureResult:
         """Gets 240x720 RGB24 (rotated) frame.
         """
@@ -249,41 +209,26 @@ class N3DSCaptureCard:
     def _show_frame(self, rgb_array: array) -> None:
         """Show the image from the frame buffer
         """
-        try:
-            frame_image = ImageTk.PhotoImage(Image.frombuffer(
-                'RGB',
-                (FRAME_WIDTH, FRAME_HEIGHT),
-                rgb_array,
-                'raw', 'RGB', 0, 1 # decoder params
-            ).rotate(90, expand=True))
-
-            # Update cavas with the new images
-            self.upper_display.create_image(0, 0, anchor='nw', image=frame_image)
-            self.lower_display.create_image(N3DS_DISPLAY2_WIDTH, 0, anchor='ne', image=frame_image)
-
-            # Update the Tkinter
-            self.upper_display.update()
-        except tk.TclError:
-            pass
+        frame_surface = pygame.image.frombuffer(rgb_array, (FRAME_WIDTH, FRAME_HEIGHT), 'RGB')
+        frame_surface = pygame.transform.rotate(frame_surface, 90)
+        self.display.blit(frame_surface, (0, 0))
+        display2_area = (N3DS_DISPLAY1_WIDTH, 0, N3DS_DISPLAY2_WIDTH, N3DS_DISPLAY_HEIGHT)
+        self.display.blit(frame_surface, (DISPLAY2_X, N3DS_DISPLAY_HEIGHT), display2_area)
+        pygame.display.flip()
 
 
     def _calculate_fps(self) -> None:
-        """Calculate Frames per Second
+        """Calculate Frames per Second and Update the window title
         """
-        try:
-            # Update frames per second in the window title
-            current_time = time.time()
+        current_time = time.time()
 
-            if current_time - self.last_fps_update_time >= 2.0:
-                elapsed_time = current_time - self.start_time
-                fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
-                title = TITLE.format(fps=fps)
-                self.frames_per_second.set(title)
-                logging.debug(title)
-                self.root.title(self.frames_per_second.get())
-                self.last_fps_update_time = current_time
-        except tk.TclError:
-            pass
+        if current_time - self.last_fps_update_time >= 2.0:
+            elapsed_time = current_time - self.start_time
+            fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
+            title = TITLE.format(fps=fps)
+            logging.debug(title)
+            pygame.display.set_caption(title)
+            self.last_fps_update_time = current_time
 
 
     def _capture_and_show_frames(self) -> None:
@@ -302,22 +247,23 @@ class N3DSCaptureCard:
         elif frame_result == CaptureResult.SKIP:
             pass
 
-        # Schedule the function to run again inmediatly
-        self.root.after('idle', self._capture_and_show_frames)
-
 
     def process_frames(self) -> None:
         """Capture and show the frames using root.after
         """
         self.start_time = time.time()
 
+        running = True
         try:
-            # Start the first call of capture and show
-            self._capture_and_show_frames()
-            # Start the Tkinter main loop
-            self.root.mainloop()
+            while running:
+                self._capture_and_show_frames()
+                self.clock.tick(60)
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        self.dispose_resources()
+                        running = False
         except N3DSCaptureException as e:
-            logging.exception(e)
+            logging.error(e)
             self.dispose_resources()
 
 
@@ -326,5 +272,7 @@ if __name__ == '__main__':
     if capture_card.device_init():
         try:
             capture_card.process_frames()
+        except KeyboardInterrupt:
+            pass
         finally:
             capture_card.dispose_resources()
