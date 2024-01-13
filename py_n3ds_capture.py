@@ -38,6 +38,8 @@ DISPLAY2_X = (N3DS_DISPLAY1_WIDTH - N3DS_DISPLAY2_WIDTH) // 2
 NDS_DISPLAY_WIDTH = 256
 NDS_DISPLAY_HEIGHT = 192
 
+BLACK_IMAGE_FRAME = array('B', '\x00'.encode('utf-8') * IMAGE_SIZE)
+
 TITLE = 'py N3DS Capture ({fps:.2f} FPS)'
 
 logging.basicConfig(
@@ -74,7 +76,9 @@ class N3DSCaptureAudio:
             buffer=256
         )
         self.channel = pygame.mixer.Channel(0)
-        self.channel.set_volume(0.5)
+        self.volume = 50
+        self.is_muted = False
+        self.channel.set_volume(self.volume / 100)
 
 
     def push_sample(self, audio_sample: array) -> None:
@@ -86,10 +90,40 @@ class N3DSCaptureAudio:
 
 
     def close(self) -> None:
-        """Close PyAudio stream
+        """Close audio stream
         """
         self.channel.stop()
 
+
+    def set_volume(self, volume: int) -> None:
+        """Set audio volume
+        """
+        if 0 <= volume <= 100:
+            self.volume = volume
+            volume = volume / 100
+            self.channel.set_volume(volume)
+
+
+    def increase_volume(self) -> None:
+        """Increase audio volume by 5 levels
+        """
+        self.set_volume(self.volume + 5)
+
+
+    def decrease_volume(self) -> None:
+        """Decrease audio volume by 5 levels
+        """
+        self.set_volume(self.volume - 5)
+
+
+    def mute_or_unmute(self) -> None:
+        """Set audio volume to 0
+        """
+        self.is_muted = not self.is_muted
+        if self.is_muted:
+            self.channel.set_volume(0.0)
+        else:
+            self.set_volume(self.volume)
 
 
 class N3DSCaptureCard:
@@ -97,8 +131,8 @@ class N3DSCaptureCard:
     """
 
     def __init__(self) -> None:
-        self.device: usb.core.Device
-        self.interface: usb.core.Interface
+        self.device: usb.core.Device = None
+        self.interface: usb.core.Interface = None
 
         transfer_size = (FRAME_SIZE + 0x1ff) & ~0x1ff
         self.transferred = array('B', '\x00'.encode('utf-8') * transfer_size)
@@ -167,32 +201,35 @@ class N3DSCaptureCard:
     def device_init(self) -> bool:
         """Open capture device (only call once)
         """
-        self.device = usb.core.find(idVendor=VID_3DS, idProduct=PID_3DS)
+        try:
+            self.device = usb.core.find(idVendor=VID_3DS, idProduct=PID_3DS)
 
-        if self.device is None:
+            if self.device is None:
+                return False
+
+            self.device.set_configuration(DEFAULT_CONFIGURATION)
+
+            for cfg in self.device:
+                for iface in cfg:
+                    if iface and iface.bInterfaceNumber == CAPTURE_INTERFACE:
+                        self.interface = iface
+                    if self.interface:
+                        break
+
+            if self.interface is None:
+                return False
+
+            usb.util.claim_interface(self.device, self.interface)
+
+            self._vend_out(CMDOUT_CAPTURE_START, 0, 0)
+            time.sleep(0.5)
+
+            return True
+        except IOError:
             return False
 
-        self.device.set_configuration(DEFAULT_CONFIGURATION)
 
-        for cfg in self.device:
-            for iface in cfg:
-                if iface and iface.bInterfaceNumber == CAPTURE_INTERFACE:
-                    self.interface = iface
-                if self.interface:
-                    break
-
-        if self.interface is None:
-            return False
-
-        usb.util.claim_interface(self.device, self.interface)
-
-        self._vend_out(CMDOUT_CAPTURE_START, 0, 0)
-        time.sleep(0.5)
-
-        return True
-
-
-    def dispose_resources(self) -> None:
+    def close_capture(self) -> None:
         """Close capture device
         """
         if self.device:
@@ -203,6 +240,8 @@ class N3DSCaptureCard:
             self.device = None
 
         self.n3ds_capture_audio.close()
+        self._show_frame(BLACK_IMAGE_FRAME)
+        pygame.display.set_caption("py N3DS Capture (Disconnected...)")
 
 
     def _grab_frame(self) -> CaptureResult:
@@ -288,7 +327,7 @@ class N3DSCaptureCard:
             self._calculate_fps()
             self.frame_count += 1
         elif frame_result == CaptureResult.ERROR:
-            self.dispose_resources()
+            self.close_capture()
         elif frame_result == CaptureResult.SKIP:
             pass
 
@@ -301,12 +340,21 @@ class N3DSCaptureCard:
         running = True
         try:
             while running:
-                self._capture_and_show_frames()
+                if self.device is None:
+                    logging.debug("Try to reconnect...")
+                    self.device_init()
+                    time.sleep(0.02)
+
+                try:
+                    self._capture_and_show_frames()
+                except usb.core.USBError:
+                    self.close_capture()
+
                 self.clock.tick(60)
 
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
-                        self.dispose_resources()
+                        self.close_capture()
                         running = False
                     elif event.type == pygame.KEYDOWN:
                         if event.key in [pygame.K_1, pygame.K_0]:
@@ -318,17 +366,22 @@ class N3DSCaptureCard:
                         elif event.key == pygame.K_c:
                             self.is_nds_crop = not self.is_nds_crop
                             self._resize_display(self.display_scale)
+                        elif event.key in [pygame.K_PLUS, pygame.K_EQUALS]:
+                            self.n3ds_capture_audio.increase_volume()
+                        elif event.key == pygame.K_MINUS:
+                            self.n3ds_capture_audio.decrease_volume()
+                        elif event.key == pygame.K_m:
+                            self.n3ds_capture_audio.mute_or_unmute()
         except N3DSCaptureException as e:
             logging.error(e)
-            self.dispose_resources()
+            self.close_capture()
 
 
 if __name__ == '__main__':
     capture_card = N3DSCaptureCard()
-    if capture_card.device_init():
-        try:
-            capture_card.process_frames()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            capture_card.dispose_resources()
+    try:
+        capture_card.process_frames()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        capture_card.close_capture()
