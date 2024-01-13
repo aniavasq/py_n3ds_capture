@@ -76,3 +76,7 @@ python py_n3ds_capture.py
 
 ## TODO
 - Investigate split-screen feature alternatives. Currently, Pygame does not support multiple windows, so a split-screen feature is not possible.
+
+## Media
+
+![py_n3ds_capture_screenshot](py_n3ds_capture_screenshot.png "py_n3ds_capture_screenshot")
