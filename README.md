@@ -2,11 +2,14 @@
 
 **py N3DS Capture** is a Python program based on [CuteCapture](https://github.com/Gotos/CuteCapture) for capturing video from an _Old_ 3DS console for linux and Mac OS X with capture cards by [Loopy](3dscapture.com). It uses the libusb library for USB communication and Pygame for display and audio playback.
 
-## Dependencies
+## Requirements
 - Python 3.9 or higher
 - libusb 1.0.0
+- pygame
+- pyusb
 
 ## Installation
+- Donwload or clone this repository
 - Install Python 3.9 from the official [Python website](https://www.python.org/downloads/).
 - Install libusb 1.0.0 using the package manager for your operating system.
 
@@ -70,3 +73,6 @@ python py_n3ds_capture.py
 - `-`: Decrease the volume
 - `+`: Increase the volume
 - `m`: Toggle mute
+
+## TODO
+- Investigate split-screen feature alternatives. Currently, Pygame does not support multiple windows, so a split-screen feature is not possible.

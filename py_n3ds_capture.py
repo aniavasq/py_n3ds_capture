@@ -6,6 +6,7 @@ import logging
 import time
 from array import array
 from enum import Enum
+from os import path
 from typing import Union
 
 import pygame
@@ -15,6 +16,7 @@ import usb.util
 
 PROGRAM_NAME = 'py N3DS Capture'
 TITLE = PROGRAM_NAME + ' ({fps:.2f} FPS)'
+ICON_FILENAME = 'Icon-App-40x40@3x.png'
 __version__ = '0.1'
 
 VID_3DS = 0x16D0
@@ -150,6 +152,9 @@ class N3DSCaptureCard:
         self.n3ds_capture_audio = N3DSCaptureAudio()
 
         pygame.init()
+        path_to_icon = path.abspath(path.join(path.dirname(__file__), ICON_FILENAME))
+        icon = pygame.image.load(path_to_icon)
+        pygame.display.set_icon(icon)
         self.is_nds_crop = False
         self.display_scale = 1.0
         self.display_width = N3DS_DISPLAY1_WIDTH
