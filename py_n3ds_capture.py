@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """N3DS video capture module
 """
+import argparse
 import logging
 import time
 from array import array
@@ -11,6 +12,10 @@ import pygame
 import usb.core
 import usb.util
 
+
+PROGRAM_NAME = 'py N3DS Capture'
+TITLE = PROGRAM_NAME + ' ({fps:.2f} FPS)'
+__version__ = '0.1'
 
 VID_3DS = 0x16D0
 PID_3DS = 0x06A3
@@ -40,7 +45,6 @@ NDS_DISPLAY_HEIGHT = 192
 
 BLACK_IMAGE_FRAME = array('B', '\x00'.encode('utf-8') * IMAGE_SIZE)
 
-TITLE = 'py N3DS Capture ({fps:.2f} FPS)'
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -241,7 +245,7 @@ class N3DSCaptureCard:
 
         self.n3ds_capture_audio.close()
         self._show_frame(BLACK_IMAGE_FRAME)
-        pygame.display.set_caption("py N3DS Capture (Disconnected...)")
+        pygame.display.set_caption(f"{PROGRAM_NAME} (Disconnected...)")
 
 
     def _grab_frame(self) -> CaptureResult:
@@ -341,7 +345,7 @@ class N3DSCaptureCard:
         try:
             while running:
                 if self.device is None:
-                    logging.debug("Try to reconnect...")
+                    logging.debug('Try to reconnect...')
                     self.device_init()
                     time.sleep(0.02)
 
@@ -375,13 +379,91 @@ class N3DSCaptureCard:
         except N3DSCaptureException as e:
             logging.error(e)
             self.close_capture()
+            
+    def run(self):
+        """Main method to run the application
+        """
+        parser = argparse.ArgumentParser(description=PROGRAM_NAME)
+        parser.add_argument(
+            '--log-level', '-l',
+            choices=['DEBUG', 'INFO', 'ERROR'],
+            default='INFO',
+            help='Set the log level in the console to DEBUG, INFO, or ERROR'
+        )
+        parser.add_argument(
+            '--manual', '-m', action='store_true',
+            help=('Show keyboard shortcuts: 1 to scale the window to x1, 2 to scale the window to '
+                  'x1.5, and 3 to scale the window to x2. Press c to toggle cropping, - to decrease'
+                  'the volume, + to increase the volume, m to toggle mute.')
+        )
+        parser.add_argument(
+            '--info', '-a', action='store_true',
+            help='Show capture card device info.'
+        )
+        parser.add_argument(
+            '--version', '-v', action='store_true',
+            help='Show the version of the script.'
+        )
+
+        args = parser.parse_args()
+
+        logging.getLogger().setLevel(args.log_level)
+
+        if args.manual:
+            print('Keyboard Shortcuts:')
+            print('1 - Scale the window to x1')
+            print('2 - Scale the window to x1.5')
+            print('3 - Scale the window to x2')
+            print('c - Toggle cropping to the original DS resolution (hold START or SELECT when '
+                  'launching a game)')
+            print('- - Decrease the volume')
+            print('+ - Increase the volume')
+            print('m - Toggle mute')
+            return
+
+        if args.info:
+            self.show_device_info()
+            return
+
+        if args.version:
+            print(f"{PROGRAM_NAME} Version: {__version__}")
+            return
+
+        try:
+            capture_card.process_frames()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            capture_card.close_capture()
+
+
+    def show_device_info(self):
+        """Show capture card device info.
+        """
+        try:
+            self.device_init()
+        except N3DSCaptureException as e:
+            logging.error('Error retrieving device information')
+            logging.error(e)
+
+        if self.device:
+            active_config = self.device.get_active_configuration()
+            config_value = active_config.bConfigurationValue
+            interface_number = self.interface.bInterfaceNumber if self.interface else None
+
+            print('Capture Device Info:')
+            print(f'\tVendor ID: {self.device.idVendor}')
+            print(f'\tProduct ID: {self.device.idProduct}')
+            print(f'\tManufacturer: {usb.util.get_string(self.device, self.device.iManufacturer)}')
+            print(f'\tProduct: {usb.util.get_string(self.device, self.device.iProduct)}')
+            print(f'\tSerial Number: {usb.util.get_string(self.device, self.device.iSerialNumber)}')
+            print(f'\tActive Configuration: {config_value}')
+            print(f'\tInterface Number: {interface_number}')
+            self.close_capture()
+        else:
+            print('No capture device initialized.')
 
 
 if __name__ == '__main__':
     capture_card = N3DSCaptureCard()
-    try:
-        capture_card.process_frames()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        capture_card.close_capture()
+    capture_card.run()
