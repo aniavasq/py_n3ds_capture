@@ -35,6 +35,8 @@ N3DS_DISPLAY1_WIDTH = 400
 N3DS_DISPLAY2_WIDTH = 320
 N3DS_DISPLAY_HEIGHT = FRAME_WIDTH
 DISPLAY2_X = (N3DS_DISPLAY1_WIDTH - N3DS_DISPLAY2_WIDTH) // 2
+NDS_DISPLAY_WIDTH = 256
+NDS_DISPLAY_HEIGHT = 192
 
 TITLE = 'py N3DS Capture ({fps:.2f} FPS)'
 
@@ -110,10 +112,30 @@ class N3DSCaptureCard:
         self.n3ds_capture_audio = N3DSCaptureAudio()
 
         pygame.init()
+        self.is_nds_crop = False
+        self.display_scale = 1.0
+        self.display_width = N3DS_DISPLAY1_WIDTH
+        self.display_height = N3DS_DISPLAY_HEIGHT * 2
         self.display = pygame.display.set_mode(
-            (N3DS_DISPLAY1_WIDTH, N3DS_DISPLAY_HEIGHT * 2))
+            (self.display_width, self.display_height))
         title = TITLE.format(fps=0.0)
         pygame.display.set_caption(title)
+
+
+    def _resize_display(self, new_scale: float) -> None:
+        """Resize the display window
+        """
+        self.display_scale = new_scale
+
+        if self.is_nds_crop:
+            self.display_width = int(NDS_DISPLAY_WIDTH * self.display_scale)
+            self.display_height = int(NDS_DISPLAY_HEIGHT * 2 * self.display_scale)
+        else:
+            self.display_width = int(N3DS_DISPLAY1_WIDTH * self.display_scale)
+            self.display_height = int(N3DS_DISPLAY_HEIGHT * 2 * self.display_scale)
+
+        self.display = pygame.display.set_mode(
+            (self.display_width, self.display_height))
 
 
     def _vend_out(
@@ -212,11 +234,24 @@ class N3DSCaptureCard:
         frame_surface =  pygame.transform.rotate(pygame.image.frombuffer(
             rgb_buf, (FRAME_WIDTH, FRAME_HEIGHT), 'RGB'), 90)
 
-        display1_area = (0, 0, N3DS_DISPLAY1_WIDTH, N3DS_DISPLAY_HEIGHT)
-        self.display.blit(frame_surface, (0, 0), display1_area)
+        if self.display_scale > 1:
+            frame_surface = pygame.transform.scale(
+                frame_surface,
+                (FRAME_HEIGHT * self.display_scale, FRAME_WIDTH * self.display_scale))
 
-        display2_area = (N3DS_DISPLAY1_WIDTH, 0, N3DS_DISPLAY2_WIDTH, N3DS_DISPLAY_HEIGHT)
-        self.display.blit(frame_surface, (DISPLAY2_X, N3DS_DISPLAY_HEIGHT), display2_area)
+        if self.is_nds_crop:
+            display1_area = (((N3DS_DISPLAY1_WIDTH - NDS_DISPLAY_WIDTH) // 2) * self.display_scale, (N3DS_DISPLAY_HEIGHT - NDS_DISPLAY_HEIGHT) * self.display_scale, NDS_DISPLAY_WIDTH * self.display_scale, NDS_DISPLAY_HEIGHT * self.display_scale)
+
+            display2_area = ((N3DS_DISPLAY1_WIDTH + (N3DS_DISPLAY2_WIDTH - NDS_DISPLAY_WIDTH) // 2) * self.display_scale, 0, NDS_DISPLAY_WIDTH * self.display_scale, NDS_DISPLAY_HEIGHT * self.display_scale)
+            display2_dest = (0, NDS_DISPLAY_HEIGHT * self.display_scale)
+        else:
+            display1_area = (0, 0, N3DS_DISPLAY1_WIDTH * self.display_scale, N3DS_DISPLAY_HEIGHT * self.display_scale)
+
+            display2_area = (N3DS_DISPLAY1_WIDTH * self.display_scale, 0, N3DS_DISPLAY2_WIDTH * self.display_scale, N3DS_DISPLAY_HEIGHT * self.display_scale)
+            display2_dest = (DISPLAY2_X * self.display_scale, N3DS_DISPLAY_HEIGHT * self.display_scale)
+
+        self.display.blit(frame_surface, (0, 0), display1_area)
+        self.display.blit(frame_surface, display2_dest, display2_area)
 
         pygame.display.flip()
 
@@ -268,10 +303,21 @@ class N3DSCaptureCard:
             while running:
                 self._capture_and_show_frames()
                 self.clock.tick(60)
+
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         self.dispose_resources()
                         running = False
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key in [pygame.K_1, pygame.K_0]:
+                            self._resize_display(1.0)
+                        elif event.key == pygame.K_2:
+                            self._resize_display(1.5)
+                        elif event.key == pygame.K_3:
+                            self._resize_display(2.0)
+                        elif event.key == pygame.K_c:
+                            self.is_nds_crop = not self.is_nds_crop
+                            self._resize_display(self.display_scale)
         except N3DSCaptureException as e:
             logging.error(e)
             self.dispose_resources()
