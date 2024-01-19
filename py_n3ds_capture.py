@@ -2,6 +2,7 @@
 """N3DS video capture module
 """
 import argparse
+import datetime
 import logging
 import time
 from array import array
@@ -170,6 +171,8 @@ class N3DSCaptureCard:
         self.display2_dest = (DISPLAY2_X * self.display_scale, N3DS_DISPLAY_HEIGHT * self.display_scale)
         self.surface_size = self._get_surface_size()
 
+        self.do_screenshot = False
+
 
     def _get_surface_size(self) -> Tuple[int, int]:
         return (FRAME_HEIGHT * self.display_scale, FRAME_WIDTH * self.display_scale)
@@ -275,6 +278,14 @@ class N3DSCaptureCard:
         pygame.display.set_caption(f"{PROGRAM_NAME} (Disconnected...)")
 
 
+    def _screenshot(self) -> None:
+        self.do_screenshot = False
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d at %H.%M.%S")
+        pygame.image.save(
+            self.display,
+            path.join(path.expanduser("~"), f"Screenshot {timestamp}.png"))
+
+
     def _grab_frame(self) -> CaptureResult:
         """Gets 240x720 RGB24 (rotated) frame.
         """
@@ -311,6 +322,9 @@ class N3DSCaptureCard:
 
         self.display.blit(frame_surface, (0, 0), self.display1_area)
         self.display.blit(frame_surface, self.display2_dest, self.display2_area)
+
+        if self.do_screenshot:
+            self._screenshot()
 
         pygame.display.flip()
 
@@ -392,6 +406,8 @@ class N3DSCaptureCard:
                             self.n3ds_capture_audio.decrease_volume()
                         elif event.key == pygame.K_m:
                             self.n3ds_capture_audio.mute_or_unmute()
+                        elif event.key == pygame.K_s:
+                            self.do_screenshot = True
         except N3DSCaptureException as e:
             logging.error(e)
             self.close_capture()
@@ -432,6 +448,7 @@ class N3DSCaptureCard:
             print('3 - Scale the window to x2')
             print('c - Toggle cropping to the original DS resolution (hold START or SELECT when '
                   'launching a game)')
+            print('s - Take screenshot and save it to the Home directory')
             print('- - Decrease the volume')
             print('+ - Increase the volume')
             print('m - Toggle mute')
